@@ -5,8 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
 
 # Create a dedicated non-root user and writable data directory
 RUN groupadd --system sentinel && \
@@ -20,7 +24,13 @@ RUN groupadd --system sentinel && \
 
 COPY requirements.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir --upgrade \
+    pip \
+    "setuptools>=78.1.1" \
+    "msgpack>=1.2.3" \
+    "urllib3>=2.8.0" \
+    -r requirements.txt \
+    && python -m pip check
 
 # Copy application source code
 COPY --chown=sentinel:sentinel app/ ./app/
