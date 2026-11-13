@@ -86,13 +86,11 @@ jobs:
         with:
           version: v0.76.2  
           image-ref: sentinel-api:${{ github.sha }}
-          format: json
-          output: trivy-results.json  
-          exit-code: "0" 
+          format: table
+          exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: HIGH,CRITICAL
-          list-all-pkgs: true
 
       - name: Save scanned Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
