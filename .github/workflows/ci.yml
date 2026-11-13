@@ -1,3 +1,4 @@
+
 name: Sentinel API CI/CD
 
 on:
@@ -44,7 +45,7 @@ jobs:
         run: python -m pip install --upgrade pip
 
       - name: Install development dependencies
-        run: pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements-dev.txt
 
       - name: Run Ruff linting
         run: ruff check .
@@ -74,23 +75,41 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Build Docker image
-        run: |
-          docker build \
-            --pull \
-            -t sentinel-api:${{ github.sha }} \
-            .
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: sentinel-api:${{ github.sha }}
+          pull: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Scan Docker image with Trivy
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          version: v0.76.2  
+          version: v0.76.2
           image-ref: sentinel-api:${{ github.sha }}
           format: table
           exit-code: "1"
           ignore-unfixed: true
           vuln-type: os,library
           severity: HIGH,CRITICAL
+          trivy-flags: --skip-files "**/pip/_vendor/bom.cdx.json"
+
+      - name: Generate image SBOM
+        if: success()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.2
+          image-ref: sentinel-api:${{ github.sha }}
+          format: cyclonedx
+          output: sentinel-api-sbom.json
+          trivy-flags: --skip-files "**/pip/_vendor/bom.cdx.json"
 
       - name: Save scanned Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -103,6 +122,14 @@ jobs:
           name: sentinel-api-image
           path: sentinel-api.tar
           retention-days: 1
+
+      - name: Upload image SBOM
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-api-sbom
+          path: sentinel-api-sbom.json
+          retention-days: 30
 
   # JOB 3: PUBLISH VERIFIED IMAGE TO GHCR
 
@@ -160,3 +187,4 @@ jobs:
           echo "Published image:"
           echo "${IMAGE_NAME}:latest"
           echo "${IMAGE_NAME}:sha-${GITHUB_SHA}"
+

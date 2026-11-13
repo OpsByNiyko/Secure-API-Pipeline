@@ -1,53 +1,190 @@
-FROM python:3.14-slim
 
-# Python runtime configuration
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+name: Sentinel API CI/CD
 
-WORKDIR /app
+on:
+  push:
+    branches:
+      - main
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
-    && rm -rf /var/lib/apt/lists/*
+  pull_request:
+    branches:
+      - main
 
+  workflow_dispatch:
 
-# Create a dedicated non-root user and writable data directory
-RUN groupadd --system sentinel && \
-    useradd --system \
-    --gid sentinel \
-    --home-dir /app \
-    --shell /usr/sbin/nologin \
-    sentinel && \
-    mkdir -p /app/data && \
-    chown -R sentinel:sentinel /app
+permissions:
+  contents: read
 
-COPY requirements.txt .
+concurrency:
+  group: sentinel-api-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
-RUN python -m pip install --no-cache-dir --upgrade \
-    pip \
-    "setuptools>=78.1.1" \
-    "msgpack>=1.2.3" \
-    "urllib3>=2.8.0" \
-    -r requirements.txt \
-    && python -m pip check
+jobs:
 
-# Copy application source code
-COPY --chown=sentinel:sentinel app/ ./app/
+  # JOB 1: QUALITY, TESTING AND DEPENDENCY SECURITY
 
-# Run as the dedicated non-root user
-USER sentinel
+  quality:
+    name: Code Quality and Security Checks
 
-# Document the application port
-EXPOSE 8000
+    runs-on: ubuntu-24.04
 
-# Check application health from inside the container
-HEALTHCHECK --interval=30s \
-    --timeout=3s \
-    --start-period=10s \
-    --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
 
-# Start the FastAPI application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Run Ruff linting
+        run: ruff check .
+
+      - name: Check Ruff formatting
+        run: ruff format --check .
+
+      - name: Run automated tests
+        run: pytest -v
+
+      - name: Run Bandit security scan
+        run: bandit -r app -ll
+
+      - name: Audit Python dependencies
+        run: pip-audit -r requirements.txt
+
+  # JOB 2: DOCKER BUILD AND IMAGE VULNERABILITY SCAN
+
+  container-scan:
+    name: Docker Build and Trivy Scan
+
+    needs: quality
+
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: sentinel-api:${{ github.sha }}
+          pull: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.2
+          image-ref: sentinel-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          trivy-flags: --skip-files "**/pip/_vendor/bom.cdx.json"
+
+      - name: Generate image SBOM
+        if: success()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          version: v0.76.2
+          image-ref: sentinel-api:${{ github.sha }}
+          format: cyclonedx
+          output: sentinel-api-sbom.json
+          trivy-flags: --skip-files "**/pip/_vendor/bom.cdx.json"
+
+      - name: Save scanned Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker save sentinel-api:${{ github.sha }} -o sentinel-api.tar
+
+      - name: Upload scanned Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-api-image
+          path: sentinel-api.tar
+          retention-days: 1
+
+      - name: Upload image SBOM
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sentinel-api-sbom
+          path: sentinel-api-sbom.json
+          retention-days: 30
+
+  # JOB 3: PUBLISH VERIFIED IMAGE TO GHCR
+
+  publish:
+    name: Publish Docker Image to GHCR
+
+    needs:
+      - quality
+      - container-scan
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download scanned Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: sentinel-api-image
+
+      - name: Load scanned Docker image
+        run: docker load --input sentinel-api.tar
+
+      - name: Authenticate to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tag and publish Docker image
+        run: |
+          IMAGE_NAME="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          docker tag \
+            "sentinel-api:${GITHUB_SHA}" \
+            "${IMAGE_NAME}:sha-${GITHUB_SHA}"
+
+          docker tag \
+            "sentinel-api:${GITHUB_SHA}" \
+            "${IMAGE_NAME}:latest"
+
+          docker push "${IMAGE_NAME}:sha-${GITHUB_SHA}"
+
+          docker push "${IMAGE_NAME}:latest"
+
+      - name: Display published image
+        run: |
+          IMAGE_NAME="ghcr.io/$(echo "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+
+          echo "Published image:"
+          echo "${IMAGE_NAME}:latest"
+          echo "${IMAGE_NAME}:sha-${GITHUB_SHA}"
 
