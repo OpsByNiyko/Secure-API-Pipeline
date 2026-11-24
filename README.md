@@ -1,879 +1,815 @@
-# Sentinel API — Secure API & DevSecOps Pipeline
+# Sentinel API
 
-A security-focused REST API built with **FastAPI**, **SQLite**, and **Docker**, supported by an automated CI/CD pipeline that performs code-quality checks, automated testing, dependency auditing, static security analysis, and container vulnerability scanning before publishing images to **GitHub Container Registry (GHCR)**.
+### Engineering a Secure, Traceable Application Delivery Pipeline
 
-The project follows a practical DevSecOps workflow: security is integrated throughout the software delivery lifecycle rather than treated as a final deployment step.
+**#!Shebang everyone. Welcome to Sentinel API.**
 
-The application is packaged into a hardened Docker image and deployed to an **Azure Linux virtual machine**, with persistent database storage and restricted network exposure.
+A successful deployment is not necessarily a trustworthy deployment.
 
----
+An application can pass its tests and still contain vulnerable dependencies. A container can run perfectly while retaining unnecessary privileges. A pipeline can scan an image successfully, only to publish a different image afterwards.
 
-## Table of Contents
+These are the problems I wanted to address with Sentinel API.
 
-- [Project Overview](#project-overview)
-- [Project Objectives](#project-objectives)
-- [Technology Stack](#technology-stack)
-- [Architecture](#architecture)
-- [Application Features](#application-features)
-- [API Reference](#api-reference)
-- [Security Implementation](#security-implementation)
-- [Project Development Stages](#project-development-stages)
-  - [Stage 1 — Application Foundation](#stage-1--application-foundation)
-  - [Stage 2 — Database Integration](#stage-2--database-integration)
-  - [Stage 3 — Authentication and Access Control](#stage-3--authentication-and-access-control)
-  - [Stage 4 — Application Security and Hardening](#stage-4--application-security-and-hardening)
-  - [Stage 5 — Docker Containerization](#stage-5--docker-containerization)
-  - [Stage 6 — CI/CD and DevSecOps Automation](#stage-6--cicd-and-devsecops-automation)
-  - [Stage 7 — Azure Deployment](#stage-7--azure-deployment)
-- [CI/CD Pipeline](#cicd-pipeline)
-- [Container Security](#container-security)
-- [Troubleshooting and Engineering Challenges](#troubleshooting-and-engineering-challenges)
-- [Local Development](#local-development)
-- [Environment Variables](#environment-variables)
-- [Deployment Architecture](#deployment-architecture)
-- [Operational Verification](#operational-verification)
-- [Lessons Learned](#lessons-learned)
-- [Future Improvements](#future-improvements)
-- [License](#license)
+Sentinel API is a security audit-event REST service built with FastAPI and SQLite. However, the application is only one part of the project. The larger engineering exercise was designing the delivery system around it: automated validation, vulnerability scanning, container hardening, artifact traceability and deployment to Microsoft Azure.
+
+This repository documents not just what I built, but **why I built it that way, the decisions behind the architecture, the challenges I encountered and what I learned along the way.**
+
+If you're here to understand the engineering, you're in the right place.
 
 ---
 
-## Project Overview
+## Project at a glance
 
-Sentinel API is a lightweight security audit-event API designed to demonstrate how a Python application can be developed, secured, containerized, tested, scanned, published, and deployed through an automated delivery pipeline.
+| Area | Implementation |
+|---|---|
+| Application | Python 3.14, FastAPI |
+| Persistence | SQLite |
+| Containerization | Docker |
+| CI/CD | GitHub Actions |
+| Code quality | Ruff |
+| Testing | pytest |
+| Static security analysis | Bandit |
+| Dependency auditing | pip-audit |
+| Container scanning | Trivy |
+| Container registry | GitHub Container Registry |
+| Cloud platform | Microsoft Azure |
+| Deployment OS | Ubuntu Server 24.04 LTS |
 
-The API provides endpoints for submitting and retrieving security audit events. Protected operations require API-key authentication, while the health endpoint remains publicly accessible to support application health checks.
+**Project repository:** [OpsByNiyko/Secure-API-Pipeline](https://github.com/OpsByNiyko/Secure-API-Pipeline)
 
-Beyond the application itself, the main focus of this project is its delivery infrastructure.
-
-The project implements several DevSecOps practices:
-
-- Automated code-quality enforcement.
-- Automated application testing.
-- Static application security testing (SAST).
-- Python dependency vulnerability auditing.
-- Container image vulnerability scanning.
-- Docker image publishing through GHCR.
-- Non-root container execution.
-- Runtime container restrictions.
-- Cloud deployment using Microsoft Azure.
-- Persistent application data across container restarts.
-
-**The objective was not simply to get an API running. It was to build and deploy an application through a repeatable, security-conscious software delivery process.**
-
-## Project Objectives
-
-1. Develop a functional REST API using FastAPI.
-2. Implement API-key authentication for protected endpoints.
-3. Persist audit events using SQLite.
-4. Introduce application-level security controls.
-5. Containerize the application using Docker.
-6. Harden the container runtime configuration.
-7. Automate testing and security checks through GitHub Actions.
-8. Scan container images for known vulnerabilities using Trivy.
-9. Publish verified container images to GitHub Container Registry.
-10. Deploy the published image to an Azure virtual machine.
-11. Maintain persistent application data independently of the container lifecycle.
-
-## Technology Stack
-
-| Category | Technology | Purpose |
-|---|---|---|
-| Language | Python 3.14 | Application development |
-| API Framework | FastAPI | REST API implementation |
-| Validation | Pydantic / Pydantic Settings | Configuration and data validation |
-| Database | SQLite | Audit-event persistence |
-| Application Server | Uvicorn | ASGI application server |
-| Containerization | Docker | Application packaging |
-| CI/CD | GitHub Actions | Automated delivery pipeline |
-| Linting | Ruff | Code quality and formatting |
-| Testing | pytest | Automated application tests |
-| SAST | Bandit | Python security analysis |
-| Dependency Audit | pip-audit | Python dependency vulnerability checks |
-| Container Scanning | Trivy | Container vulnerability scanning |
-| Container Registry | GHCR | Container image storage |
-| Cloud Provider | Microsoft Azure | Infrastructure and deployment |
-| Operating System | Ubuntu Server 24.04 LTS | Deployment environment |
+**Project scope:** Application development → security controls → containerization → CI/CD → image publishing → Azure deployment.
 
 ---
 
-## Architecture
+# 01. The problem I wanted to solve
 
-### High-Level Architecture
+I started with three questions.
 
-```text
-                       DEVELOPER
-                           |
-                           |
-                     Git Repository
-                           |
-                           v
-                  GitHub Actions CI/CD
-                           |
-             +-------------+-------------+
-             |             |             |
-             v             v             v
-           Ruff          pytest        Bandit
-             |             |             |
-             +-------------+-------------+
-                           |
-                           v
-                       pip-audit
-                           |
-                           v
-                    Docker Build
-                           |
-                           v
-                     Trivy Scan
-                           |
-                    PASS / FAIL
-                           |
-                           v
-                  Scanned Image Artifact
-                           |
-                           v
-                    GHCR Publishing
-                           |
-                           v
-                  GitHub Container Registry
-                           |
-                           |
-                     Azure VM
-                           |
-                           v
-                    Docker Runtime
-                           |
-                           v
-                     Sentinel API
-                           |
-                           v
-                       SQLite
-                  Persistent Data Volume
+**1. Can I trust what I'm deploying?**
+
+Passing tests establishes that the application behaves as expected under the tested conditions. It doesn't establish that its dependencies or operating-system packages are free from known vulnerabilities.
+
+**2. Can I control how the application runs?**
+
+A container should not automatically receive more privileges or filesystem access than its workload requires. I wanted to make the runtime environment restrictive by design.
+
+**3. Am I deploying the exact artifact I verified?**
+
+This was particularly important. If a pipeline builds and scans an image, then independently rebuilds it during publishing, the resulting image may not be identical.
+
+I wanted the security assessment to apply to the artifact that actually gets published.
+
+These questions shaped the project.
+
+The API itself was intentionally kept small. I didn't want application complexity to distract from the engineering work surrounding its delivery.
+
+The goal was to build a system in which quality checks, security controls and artifact handling were deliberate parts of the delivery process.
+
+---
+
+# 02. Understanding the architecture
+
+Before getting into individual implementation decisions, here's how the components work together.
+
+### Application architecture
+
+```mermaid
+flowchart TD
+    A[API Client] --> B[FastAPI Application]
+
+    B --> C[Health Endpoint]
+    B --> D[API-Key Authentication]
+    B --> E[Request Validation]
+
+    D --> F[Protected API Routes]
+    E --> F
+
+    F --> G[Audit Event Operations]
+    G --> H[(SQLite Database)]
 ```
 
-### Application Architecture
+The application exposes a small set of endpoints for creating and retrieving audit events.
 
-```text
-                 API CLIENT
-                     |
-                     |
-               HTTP Request
-                     |
-                     v
-              FastAPI Application
-                     |
-          +----------+----------+
-          |          |          |
-          v          v          v
-        Health    Authentication  Validation
-        Check       Dependency    & Security
-          |          |          |
-          +----------+----------+
-                     |
-                     v
-               API Endpoints
-                     |
-          +----------+----------+
-          |                     |
-          v                     v
-      Create Event          Retrieve Events
-          |                     |
-          +----------+----------+
-                     |
-                     v
-                 SQLite DB
+The health endpoint is public. Operations involving audit data require API-key authentication.
+
+### Delivery architecture
+
+```mermaid
+flowchart TD
+    A[Developer] --> B[GitHub Repository]
+    B --> C[GitHub Actions]
+
+    C --> D[Quality Job]
+    D --> E[Ruff]
+    D --> F[pytest]
+    D --> G[Bandit]
+    D --> H[pip-audit]
+
+    D --> I[Container Scan Job]
+    I --> J[Docker Build]
+    J --> K[Trivy Scan]
+
+    K --> L{Scan Passed?}
+    L -->|No| M[Pipeline Fails]
+    L -->|Yes| N[Save Scanned Image]
+
+    N --> O[GitHub Actions Artifact]
+    O --> P[Publish Job]
+    P --> Q[GitHub Container Registry]
+
+    Q --> R[Azure Linux VM]
+    R --> S[Docker Runtime]
+    S --> T[Sentinel API]
+    T --> U[(Persistent SQLite Data)]
 ```
 
-The API is intentionally lightweight. SQLite provides persistent storage without introducing an additional database service or requiring a separate database container.
+The important relationship is between scanning and publishing.
+
+The pipeline saves the image that passed Trivy and transfers it to the publishing job. The publishing job loads that artifact rather than rebuilding the application image.
+
+This is an intentional design decision, not merely a pipeline implementation detail.
 
 ---
 
-## Application Features
+# 03. How the system came together
 
-### REST API
+I approached Sentinel API in stages. Each stage introduced a capability that the next stage could build upon.
 
-The application exposes endpoints for:
+### Stage 1 — Establishing the application
 
-- Application health verification.
-- Creating security audit events.
-- Retrieving audit events.
-- Retrieving an individual event by its identifier.
+I started with FastAPI and established the API structure, request handling and health endpoint.
 
-### Authentication
+The objective was to keep the service small and provide a functional foundation for the rest of the project.
 
-Protected API operations use an API key supplied through the `X-API-Key` request header.
+### Stage 2 — Introducing persistence
 
-The API key is configured through an environment variable rather than being hardcoded into the application.
+SQLite became the persistence layer for audit events.
 
-### Database Persistence
+I implemented database initialization, event creation and retrieval. SQL statements use parameterized values rather than constructing queries through string interpolation.
 
-SQLite stores audit events in a database file.
+The database choice was intentional: the workload was small enough that introducing a separate database service would add operational complexity without providing a necessary benefit.
 
-During deployment, the database is stored outside the container's writable filesystem through a persistent host-directory mount.
+### Stage 3 — Controlling access
 
-This ensures that recreating or replacing the application container does not automatically remove the database.
+I introduced API-key authentication for protected endpoints.
+
+The application reads the expected key from configuration and compares supplied keys using constant-time comparison.
+
+The health endpoint remains unauthenticated so that the container health check can reach it without requiring application credentials.
+
+### Stage 4 — Application-level controls
+
+I introduced additional request and response controls:
+
+- Pydantic request validation.
+- A 16 KiB request-body limit.
+- Security response headers.
+- Controlled handling of unexpected application errors.
+- Environment-based configuration.
+- Parameterized database operations.
+
+The intention was to establish application-level controls before moving into container and infrastructure hardening.
+
+### Stage 5 — Containerization
+
+I packaged the service using the `python:3.14-slim` base image.
+
+The Docker image creates a dedicated system user, installs the required dependencies, checks dependency consistency and runs the application as a non-root user.
+
+I also added a Docker health check against `/health`.
+
+Container hardening continues at runtime, where filesystem permissions, Linux capabilities and resource consumption can be restricted further.
+
+### Stage 6 — CI/CD and automated validation
+
+I introduced GitHub Actions to automate code-quality checks, tests, dependency auditing, static security analysis and container vulnerability scanning.
+
+The pipeline was divided into three jobs:
+
+1. Quality and security checks.
+2. Docker build and Trivy scan.
+3. Publishing the scanned image to GHCR.
+
+This stage also introduced one of the project's most interesting troubleshooting challenges: the Trivy/SBOM issue discussed later in this walkthrough.
+
+### Stage 7 — Azure deployment
+
+The final defined stage involved deploying the published image to an Ubuntu virtual machine on Azure.
+
+I provisioned the networking and compute environment, installed Docker Engine, pulled the image from GHCR and configured the container with persistent storage and restrictive runtime settings.
+
+The deployment remained private, with application access provided through an SSH tunnel.
 
 ---
 
-## API Reference
+# 04. The application: keeping the workload intentional
 
-Base URL for local development:
+Sentinel API is an audit-event management service.
 
-```text
-http://127.0.0.1:8000
-```
+Its responsibility is straightforward: accept validated audit events and make them available for retrieval.
 
-| Method | Endpoint | Authentication | Description |
+### API endpoints
+
+| Method | Endpoint | Authentication | Purpose |
 |---|---|---|---|
-| GET | `/health` | Public | Application health check |
-| POST | `/events` | API key | Create an audit event |
-| GET | `/events` | API key | Retrieve audit events |
-| GET | `/events/{event_id}` | API key | Retrieve a specific event |
+| GET | `/health` | Public | Check application availability |
+| POST | `/events` | Required | Create an audit event |
+| GET | `/events` | Required | Retrieve audit events |
+| GET | `/events/{event_id}` | Required | Retrieve an individual event |
 
-### Authentication Header
+### Audit event model
 
-Protected endpoints require:
+An event contains:
+
+| Field | Description |
+|---|---|
+| `id` | Automatically generated identifier |
+| `event_type` | Event classification |
+| `actor` | Entity associated with the event |
+| `description` | Event description |
+| `severity` | Event severity |
+| `created_at` | UTC creation timestamp |
+
+The accepted severity values are `info`, `warning` and `critical`.
+
+The request model also applies length restrictions and validates the event-type format. Additional fields are rejected rather than silently accepted.
+
+### Example request
 
 ```http
+POST /events
+Content-Type: application/json
 X-API-Key: YOUR_API_KEY
 ```
 
-### Health Check
-
-```bash
-curl http://127.0.0.1:8000/health
+```json
+{
+  "event_type": "user.login",
+  "actor": "system-user",
+  "description": "User successfully authenticated",
+  "severity": "info"
+}
 ```
 
-### Accessing Protected Endpoints
+### Example response
 
-```bash
-curl -H "X-API-Key: YOUR_API_KEY" \
-     http://127.0.0.1:8000/events
+```json
+{
+  "id": 1,
+  "event_type": "user.login",
+  "actor": "system-user",
+  "description": "User successfully authenticated",
+  "severity": "info",
+  "created_at": "2026-01-01T12:00:00+00:00"
+}
 ```
 
-The exact request-body schema and response examples can be documented alongside the API implementation once the final endpoint models are confirmed.
+The timestamp above illustrates the response format; actual values are generated when events are created.
+
+### Retrieval behaviour
+
+The event listing endpoint supports a `limit` query parameter between 1 and 100, defaulting to 100.
+
+For example:
+
+```bash
+curl -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:8000/events?limit=20"
+```
+
+Retrieving an event that doesn't exist returns HTTP 404.
+
+The application also returns HTTP 401 when the API key is missing or invalid.
 
 ---
 
-## Security Implementation
+# 05. Engineering decisions: why I chose this architecture
 
-Security was considered at multiple layers of the application and deployment process.
+This is where the project becomes more interesting than a conventional application deployment.
 
-### Application Security
+The technologies matter, but the reasoning behind their selection matters more.
 
-| Control | Implementation |
-|---|---|
-| API Authentication | API-key authentication |
-| Secret Management | Environment-based configuration |
-| SQL Injection Protection | Parameterized SQL queries |
-| Request Validation | Pydantic validation |
-| Request Size Protection | Request-size limits |
-| Security Headers | Security response headers |
-| Error Handling | Controlled application responses |
+## Why SQLite instead of PostgreSQL?
 
-### Container Security
+I considered the workload before choosing the database.
 
-The Docker image and runtime configuration implement additional restrictions:
+Sentinel API records audit events and supports basic retrieval. For this project's scope, SQLite provided persistence without requiring another service to provision, secure, monitor and maintain.
 
-- Dedicated non-root application user.
-- Minimal Python slim base image.
-- Read-only container root filesystem at runtime.
-- Linux capabilities dropped.
-- `no-new-privileges` security option.
-- Restricted process count.
-- Memory and CPU limits.
-- Temporary filesystem for `/tmp`.
-- Persistent database directory mounted from the host.
-- Docker health check.
+That decision has a trade-off.
 
-### Supply Chain Security
+SQLite uses a single-writer model. A workload with substantial concurrent writes would eventually require a different persistence architecture.
 
-The CI/CD pipeline incorporates:
+For a larger deployment, I'd evaluate managed PostgreSQL, including its backup, availability and recovery requirements.
 
-- Bandit for Python static security analysis.
-- pip-audit for dependency vulnerability auditing.
-- Trivy for container image vulnerability scanning.
-- GHCR for publishing the scanned image.
+The lesson: choosing a technology should follow the workload, not the popularity of the technology.
 
-The pipeline is configured to fail when Trivy identifies HIGH or CRITICAL vulnerabilities within its configured scan scope.
+## Why GitHub Actions?
 
----
+The source code and delivery workflow already lived in GitHub.
 
-# Project Development Stages
+GitHub Actions allowed me to define the pipeline alongside the application, enforce checks on pushes and pull requests, and transfer artifacts between jobs.
 
-## Stage 1 — Application Foundation
+It also provided a straightforward way to authenticate to GHCR using the workflow's `GITHUB_TOKEN`.
 
-The project began with the development of a lightweight REST API using FastAPI.
+I didn't need to introduce a separate CI platform for this project.
 
-The initial objective was to establish the application structure and expose the required API endpoints.
+## Why pip-audit and Trivy?
 
-The foundation included:
+They inspect different parts of the delivery chain.
 
-- FastAPI application initialization.
-- REST endpoint implementation.
-- Health-check endpoint.
-- Request handling.
-- Initial application configuration.
+`pip-audit` checks the Python dependencies against known vulnerability advisories.
 
-The health endpoint was designed to provide a simple way for external systems and container health checks to determine whether the application was responding.
+Trivy scans the built container image, including operating-system packages and application libraries within its configured scan scope.
 
-**Outcome:** A functional API foundation ready for persistence and security integration.
+One does not replace the other.
 
-## Stage 2 — Database Integration
+I wanted dependency auditing before packaging and image scanning after packaging.
 
-SQLite was introduced to provide persistent storage for audit events.
+## Why scan once and publish the same image?
 
-The application was extended to support:
+A container image is a build artifact.
 
-- Creating audit events.
-- Retrieving stored events.
-- Retrieving individual events using their identifiers.
-- Database initialization and connection management.
+If the publishing job builds the image again, the new build could differ from the scanned one because of changes in base-image contents or package repositories.
 
-Parameterized SQL queries were used to avoid constructing database statements through unsafe string interpolation.
+Instead, the scan job saves the image as a workflow artifact. The publish job downloads and loads that exact artifact.
 
-SQLite was selected because the application did not require the operational overhead of a separate database server.
+This gives the pipeline a stronger relationship between what was assessed and what was published.
 
-**Outcome:** Audit events could be persisted and retrieved from a database.
+## Why a non-root container user?
 
-## Stage 3 — Authentication and Access Control
+The application doesn't require root privileges to serve HTTP requests or write to its designated data directory.
 
-API-key authentication was introduced to protect sensitive application operations.
+The Dockerfile creates a dedicated user and assigns ownership of the application directory accordingly.
 
-The implementation distinguishes between public and protected endpoints.
+Running with reduced privileges limits the permissions available to the process.
 
-| Endpoint | Access |
-|---|---|
-| `/health` | Public |
-| `/events` | API key required |
-| `/events/{event_id}` | API key required |
+## Why a read-only root filesystem?
 
-The API key is supplied through the `X-API-Key` header and configured externally through environment-based settings.
+The application should not need unrestricted filesystem writes during normal operation.
 
-This approach separates application code from deployment-specific secrets.
+At runtime, I use a read-only root filesystem and provide a temporary writable `/tmp` filesystem.
 
-**Outcome:** Protected API operations require valid authentication.
+The SQLite database is mounted separately from the host.
 
-## Stage 4 — Application Security and Hardening
+This separates temporary application activity from persistent application data.
 
-The next stage focused on strengthening the application's security posture.
+## Why localhost-only access?
 
-Controls included:
+The project did not require public access to the API.
 
-- Request validation.
-- Request-size restrictions.
-- Security response headers.
-- Environment-based secret configuration.
-- Parameterized database queries.
-- Improved error handling.
-- Static security analysis through Bandit.
-- Dependency vulnerability auditing through pip-audit.
-
-This stage also established the security expectations that would later be enforced by the automated pipeline.
-
-**Outcome:** The application gained security controls that could be tested and assessed independently of its deployment environment.
-
-## Stage 5 — Docker Containerization
-
-The application was containerized to provide a consistent runtime environment across development, testing, and deployment.
-
-The container uses:
-
-```dockerfile
-FROM python:3.14-slim
-```
-
-The image was designed to minimize unnecessary components while retaining the dependencies required to run the application.
-
-### Docker Hardening
-
-The Dockerfile implements:
-
-- Python runtime environment configuration.
-- Minimal base image.
-- Required operating-system package updates.
-- Dependency installation and validation.
-- Dedicated system group and non-root user.
-- Application ownership configuration.
-- Container health check.
-- Uvicorn as the application server.
-
-The dependency installation process upgrades selected packages to address known vulnerability findings and runs:
-
-```bash
-python -m pip check
-```
-
-This verifies that the installed Python packages have compatible dependency requirements.
-
-### Runtime Hardening
-
-Container security is also enforced when the image is executed.
-
-The deployment uses:
-
-```bash
---read-only
---cap-drop ALL
---security-opt no-new-privileges:true
---pids-limit 100
---memory 384m
---cpus 0.75
-```
-
-A temporary writable filesystem is provided for `/tmp`, while the SQLite database is mounted separately from the host.
-
-**Outcome:** The API was packaged into a hardened, portable Docker image.
-
-## Stage 6 — CI/CD and DevSecOps Automation
-
-This stage introduced automated validation, security scanning, container building, and image publishing through GitHub Actions.
-
-The objective was to ensure that the application passed the required quality and security checks before its image could be published.
-
-### Pipeline Workflow
-
-The CI/CD workflow is defined in:
-
-```text
-.github/workflows/ci.yml
-```
-
-The pipeline is divided into three major jobs.
-
-### 1. Quality Job
-
-The quality job validates the Python application.
-
-It performs:
-
-| Tool | Responsibility |
-|---|---|
-| Ruff | Linting and formatting validation |
-| pytest | Automated tests |
-| Bandit | Static security analysis |
-| pip-audit | Dependency vulnerability auditing |
-
-The pipeline does not proceed as though the application is ready when these required checks fail.
-
-### 2. Container Scan Job
-
-The container-scan job builds the Docker image and scans it using Trivy.
-
-The scan is configured to detect HIGH and CRITICAL vulnerabilities.
-
-The scan also considers operating-system and application-library vulnerabilities.
-
-The important principle is that the image is assessed before it is published.
-
-The resulting image is saved as a GitHub Actions artifact so that the publishing job can use the same image that passed the scan.
-
-### 3. Publish Job
-
-The publish job retrieves the scanned image artifact and publishes it to GitHub Container Registry.
-
-The image is tagged using:
-
-- The commit SHA.
-- The `latest` tag.
-
-The commit-specific tag provides a traceable reference to the source revision associated with the published image.
-
-**Important:** The publishing job reuses the image produced by the container-scan job rather than rebuilding the application image independently.
-
-This avoids a situation where one image is scanned but a different image is published.
-
-### Pipeline Summary
-
-```text
-        Git Push / Pull Request
-                  |
-                  v
-             Quality Job
-                  |
-        +---------+---------+
-        |         |         |
-       Ruff     pytest    Bandit
-        |         |         |
-        +---------+---------+
-                  |
-                  v
-              pip-audit
-                  |
-                  v
-           Container Scan
-                  |
-                  v
-             Docker Build
-                  |
-                  v
-              Trivy Scan
-                  |
-          +-------+-------+
-          |               |
-         FAIL            PASS
-          |               |
-       Stop Job            v
-                     Save Image Artifact
-                            |
-                            v
-                      Publish Job
-                            |
-                            v
-                           GHCR
-```
-
-**Outcome:** An automated CI/CD pipeline was established to validate the application, scan its container image, and publish the successfully scanned image.
-
----
-
-## Stage 7 — Azure Deployment
-
-The final defined project stage involved deploying the published container image to a Linux virtual machine hosted on Microsoft Azure.
-
-The deployment used the container image published during Stage 6.
-
-The VM did not need to rebuild the application or repeat the CI pipeline. Its responsibility was to retrieve and run the published image.
-
-### Azure Infrastructure
-
-| Component | Configuration |
-|---|---|
-| Cloud Provider | Microsoft Azure |
-| Region | South Africa North |
-| Resource Group | `rg-sentinel-api` |
-| Virtual Network | `vnet-sentinel` |
-| Virtual Network CIDR | `10.20.0.0/16` |
-| Subnet | `snet-app` |
-| Subnet CIDR | `10.20.1.0/24` |
-| Network Security Group | `nsg-sentinel` |
-| Virtual Machine | `vm-sentinel-api` |
-| VM Size | Standard_B1s |
-| Operating System | Ubuntu Server 24.04 LTS |
-| OS Disk | 30 GiB Standard HDD |
-| Disk SKU | Standard_LRS |
-
-The deployment used a dedicated virtual network and subnet.
-
-SSH access was restricted through the Network Security Group rather than being opened indiscriminately to the internet.
-
-### Docker Runtime Configuration
-
-Docker Engine was installed on the Ubuntu virtual machine.
-
-The application was deployed by pulling the image from GHCR.
-
-Example image reference:
-
-```bash
-docker pull ghcr.io/<github-owner>/secure-api-pipeline:sha-<commit-sha>
-```
-
-The actual owner and commit SHA should match the image published by the Stage 6 workflow.
-
-### Persistent Database Storage
-
-The deployment uses a host directory for application data:
-
-```text
-/opt/sentinel-api/data
-```
-
-The database directory is mounted into the container:
-
-```text
-/opt/sentinel-api/data:/app/data
-```
-
-This separates database persistence from the container lifecycle.
-
-If the container is removed and recreated, the database remains on the VM's filesystem.
-
-### Environment Configuration
-
-Application configuration is stored outside the image:
-
-```text
-/etc/sentinel-api/sentinel.env
-```
-
-The environment file contains the API key and database path.
-
-The file is supplied to Docker using:
-
-```bash
---env-file /etc/sentinel-api/sentinel.env
-```
-
-Secrets are not embedded in the Dockerfile or container image.
-
-### Runtime Restrictions
-
-The application is started with a restricted runtime configuration.
-
-The important options include:
-
-```bash
---restart unless-stopped
---publish 127.0.0.1:8000:8000
---read-only
---tmpfs /tmp
---cap-drop ALL
---security-opt no-new-privileges:true
---pids-limit 100
---memory 384m
---cpus 0.75
-```
-
-The application port is bound to the VM's loopback interface:
+The container port is published to the VM's loopback interface:
 
 ```text
 127.0.0.1:8000
 ```
 
-This means the API is not directly exposed through the VM's public network interface.
+I can access it through SSH port forwarding without exposing the application port directly to external clients.
 
-### Accessing the Deployed API
-
-An SSH tunnel provides access to the API from a local machine:
-
-```bash
-ssh -L 8000:127.0.0.1:8000 \
-    sentineladmin@<VM_PUBLIC_IP>
-```
-
-Once the tunnel is established, the API can be accessed locally:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
-
-Protected endpoints can then be tested using the configured API key.
-
-### Deployment Scope
-
-The deployment intentionally remained private.
-
-The project did not require:
-
-- A public application endpoint.
-- A custom domain.
-- A public reverse proxy.
-- Public HTTPS termination.
-
-Those were optional extensions, not requirements for completing the deployment stage.
-
-**Outcome:** The published container image was deployed to an Azure Linux VM with restricted network exposure, runtime hardening, and persistent database storage.
+This was a deliberate deployment boundary, not an unfinished public deployment.
 
 ---
 
-# CI/CD Pipeline
+# 06. CI/CD: establishing the delivery gates
 
-The GitHub Actions pipeline is one of the central components of this project.
-
-Rather than treating CI/CD as a simple mechanism for building and publishing containers, the workflow integrates several validation and security controls.
-
-### Quality Gates
-
-The pipeline enforces:
-
-1. Code-quality checks.
-2. Automated tests.
-3. Static application security analysis.
-4. Dependency vulnerability auditing.
-5. Container vulnerability scanning.
-
-### Image Provenance
-
-The workflow uses a commit-specific image tag.
-
-This creates a relationship between:
+The workflow lives at:
 
 ```text
-Source Commit
-     |
-     v
-GitHub Actions Run
-     |
-     v
-Container Build
-     |
-     v
-Trivy Scan
-     |
-     v
-Scanned Image Artifact
-     |
-     v
-GHCR Image
+.github/workflows/ci.yml
 ```
 
-The same image artifact is transferred between the scan and publishing jobs.
+It runs on pushes and pull requests targeting `main`, and also supports manual execution.
 
-This improves traceability and prevents unnecessary rebuilding between those stages.
+The workflow has three jobs.
+
+## Job 1 — Quality and security checks
+
+The first job establishes whether the application is ready to proceed.
+
+| Tool | What it checks |
+|---|---|
+| Ruff | Linting and formatting |
+| pytest | Automated tests |
+| Bandit | Python security findings |
+| pip-audit | Known vulnerabilities in Python dependencies |
+
+The commands include:
+
+```bash
+ruff check .
+ruff format --check .
+pytest -v
+bandit -r app -ll
+pip-audit -r requirements.txt
+```
+
+The pipeline uses Python 3.14 and installs the development dependencies from `requirements-dev.txt`.
+
+A failure in this job prevents the dependent container scan job from proceeding.
+
+## Job 2 — Container build and vulnerability scan
+
+Once the quality job succeeds, the pipeline builds the Docker image.
+
+The image is tagged with the Git commit SHA.
+
+Trivy then scans the image using the following policy:
+
+```yaml
+format: table
+exit-code: "1"
+ignore-unfixed: true
+vuln-type: os,library
+severity: HIGH,CRITICAL
+```
+
+The scan is intended to stop publication when qualifying HIGH or CRITICAL vulnerabilities are detected.
+
+The image is saved and uploaded as an artifact on pushes to `main`, after the scan succeeds.
+
+## Job 3 — Publish to GHCR
+
+The publishing job runs only for pushes to `main`, and only after the quality and container-scan jobs succeed.
+
+It downloads the saved image artifact, loads it into Docker and authenticates to GitHub Container Registry.
+
+The image receives two tags:
+
+```text
+sha-<commit-sha>
+latest
+```
+
+The commit-specific tag is important because it identifies the source revision associated with the image.
+
+The `latest` tag is convenient, but mutable. For deployment and traceability, I prefer the commit-specific tag.
+
+**The result:** an automated delivery pipeline that validates the application, scans the built image and publishes the artifact that passed the configured scan.
 
 ---
 
-# Troubleshooting and Engineering Challenges
+# 07. The challenge: when Trivy kept reporting the wrong setuptools version
 
-One of the most valuable parts of this project was troubleshooting the CI/CD pipeline.
+This was one of the most valuable troubleshooting exercises in the project.
 
-The pipeline did not work perfectly from the beginning. In particular, Trivy repeatedly reported a HIGH-severity vulnerability associated with setuptools.
-
-The interesting part was that the vulnerability finding did not accurately represent the installed setuptools version in the container.
-
-Instead of immediately suppressing the finding, the issue was investigated at the image and SBOM level.
-
-## 1. Trivy Reporting a setuptools Vulnerability
-
-### The Problem
-
-During container scanning, Trivy reported:
+The container scan repeatedly failed with a HIGH-severity finding:
 
 ```text
-HIGH: CVE-2025-47273
+CVE-2025-47273
 Package: setuptools
-Detected Version: 70.3.0
+Detected version: 70.3.0
 ```
 
-The Dockerfile already upgraded setuptools during image construction.
+The unexpected part was that the Dockerfile already upgraded setuptools.
 
-The expected installed version was:
+The installed version I expected was:
 
 ```text
 setuptools 84.2.1
 ```
 
-However, Trivy continued reporting the older vulnerable version.
+So why was Trivy reporting an older version?
 
-This created a discrepancy between the actual installed package and the package version reported by the scanner.
+## Investigating the discrepancy
 
-### Initial Investigation
+I didn't want to solve this by blindly suppressing the vulnerability.
 
-The first step was to verify the installed package inside the built Docker image.
+First, I inspected the actual built container.
 
 The investigation confirmed:
 
 - The installed setuptools version was `84.2.1`.
 - Only one setuptools distribution metadata directory was present.
 - Python reported the expected installed version.
-- The older version reported by Trivy was not the active installed setuptools distribution.
+- The vulnerable version was not the active installed setuptools distribution.
 
-This suggested that the scanner was finding another source of package metadata.
+That changed the direction of the investigation.
 
-### Identifying the Root Cause
+The scanner was finding package information somewhere other than the installed distribution metadata.
 
-Further investigation revealed a stale setuptools component entry inside pip's embedded CycloneDX SBOM:
+Further inspection identified an outdated setuptools component entry inside pip's embedded CycloneDX SBOM:
 
 ```text
 pip/_vendor/bom.cdx.json
 ```
 
-The embedded SBOM contained an outdated setuptools version reference.
+The stale entry was being interpreted as a component during image scanning.
 
-Trivy was interpreting this metadata as a component in its scan target, resulting in a vulnerability finding that did not reflect the active installed setuptools version.
+The important distinction was between the package actually installed in the container and the older package version referenced by embedded metadata.
 
-The distinction was important:
+## Choosing a correction
 
-**The issue was stale package metadata in an embedded SBOM, not evidence that the container was actually running the vulnerable setuptools release.**
+There were several possible approaches.
 
-## 2. Correcting the Trivy Scan
+| Proposed approach | Decision |
+|---|---|
+| Ignore the CVE globally | Rejected |
+| Lower the vulnerability severity threshold | Rejected |
+| Disable Trivy | Rejected |
+| Exclude all SBOM files | Rejected |
+| Exclude the specific stale metadata file | Implemented |
 
-Rather than globally ignoring the CVE or weakening the vulnerability policy, the solution was to exclude the specific stale metadata file from the Trivy scan.
+The correction was deliberately narrow.
 
-The following configuration was added to the Trivy scan step:
+I added the following exclusion to the Trivy scan configuration:
 
 ```yaml
 skip-files: "**/pip/_vendor/bom.cdx.json"
 ```
 
-This instructs Trivy to skip the identified file during filesystem scanning.
-
-The configured vulnerability severity threshold remained unchanged:
+The HIGH/CRITICAL severity policy and failing exit code remained unchanged:
 
 ```yaml
 severity: HIGH,CRITICAL
-exit-code: '1'
+exit-code: "1"
 ```
 
-The scanner therefore continued to fail the pipeline when qualifying HIGH or CRITICAL vulnerabilities were detected elsewhere in the configured scan scope.
+This avoided weakening the entire vulnerability gate to address one misleading metadata entry.
 
-### Why This Was the Appropriate Fix
+## What changed?
 
-The correction was deliberately narrow.
+The pipeline could proceed without the stale embedded SBOM entry generating the same misleading setuptools finding.
 
-| Approach | Decision |
-|---|---|
-| Globally ignore the CVE | Rejected |
-| Lower the vulnerability severity threshold | Rejected |
-| Disable Trivy scanning | Rejected |
-| Skip all SBOM files | Rejected |
-| Exclude the specific stale embedded SBOM file | Implemented |
+More importantly, the actual installed package version had already been verified independently.
 
-The objective was to correct the scanner's input without weakening the security gate.
+I did not interpret this as proof that the entire image was vulnerability-free. The exclusion only removes that particular file from the scan input. Other components remain subject to the configured scan.
 
-### Result
+## The engineering lesson
 
-After implementing the exclusion:
+A security scanner is only as useful as the evidence it analyzes and the interpretation applied to its findings.
 
-- The stale embedded SBOM entry no longer caused the misleading setuptools finding.
-- The actual installed setuptools version remained verified.
-- The HIGH/CRITICAL vulnerability policy remained intact.
-- The CI/CD workflow completed successfully.
-- The scanned image was published to GHCR.
+A failed scan should trigger investigation.
 
-**Engineering takeaway:** A vulnerability scanner finding must be investigated, not blindly suppressed. Understanding where package metadata originates is important when interpreting container security results.
+It should not automatically trigger a global exception, a lower severity threshold or the removal of the security control.
 
-> Note: This exclusion is specific to the identified stale metadata file. It does not disable SBOM analysis generally, remove the actual installed package from the image, or prove that every other component is vulnerability-free.
-
-## 3. Docker Dependency and Image Hardening
-
-The Docker build also required attention to package versions and dependency compatibility.
-
-The Dockerfile was updated to upgrade selected packages during image construction, including:
-
-```dockerfile
-RUN python -m pip install --no-cache-dir --upgrade \
-    pip \
-    "setuptools>=78.1.1" \
-    "msgpack>=1.2.3" \
-    "urllib3>=2.8.0" \
-    -r requirements.txt \
-    && python -m pip check
-```
-
-The purpose was to ensure that the resulting image contained the intended package versions and that the installed dependencies were compatible.
-
-The build also included an operating-system package update for `zlib1g`.
-
-The final image retained its non-root execution model and runtime security restrictions.
-
-## 4. Reusing the Scanned Image During Publishing
-
-Another important pipeline consideration was ensuring that the image published to GHCR was the same image that passed Trivy scanning.
-
-The workflow addressed this by saving the scanned Docker image as a GitHub Actions artifact.
-
-The publishing job downloads and loads that artifact before tagging and pushing it.
-
-This avoids rebuilding the image independently during the publishing stage.
-
-The result is a more consistent relationship between the image that was scanned and the image that was released.
+**The goal is not to make the pipeline green at any cost. The goal is to understand what failed and correct the underlying problem without compromising the integrity of the process.**
 
 ---
 
-# Local Development
+# 08. Container hardening: reducing runtime privileges
 
-## Prerequisites
+The Docker image is built from:
 
-The following tools are required:
+```dockerfile
+FROM python:3.14-slim
+```
 
-- Python 3.14.
-- Git.
-- Docker.
-- A GitHub account.
+The Dockerfile also:
 
-## Clone the Repository
+- Configures Python runtime behaviour.
+- Updates the selected operating-system package.
+- Creates a dedicated `sentinel` group and user.
+- Installs the required Python dependencies.
+- Runs `pip check`.
+- Copies application files with the correct ownership.
+- Switches to the non-root user.
+- Defines the container health check.
+
+The container runs as the dedicated user rather than root.
+
+### Runtime restrictions
+
+The Azure deployment adds further restrictions:
+
+| Docker option | Purpose |
+|---|---|
+| `--read-only` | Makes the container root filesystem read-only |
+| `--tmpfs /tmp` | Provides temporary writable storage |
+| `--cap-drop ALL` | Drops Linux capabilities |
+| `--security-opt no-new-privileges:true` | Prevents privilege escalation through exec |
+| `--pids-limit 100` | Restricts process creation |
+| `--memory 384m` | Sets the memory limit |
+| `--cpus 0.75` | Restricts CPU allocation |
+
+These controls are applied at runtime because image construction and container execution address different security concerns.
+
+A container can be built securely and still be run with unnecessarily broad permissions. I wanted the deployment configuration to account for that.
+
+---
+
+# 09. Deploying the application on Microsoft Azure
+
+The final stage moved Sentinel API from the CI/CD pipeline into a cloud-hosted environment.
+
+I chose Azure for this deployment and used a Linux virtual machine to retain control over the networking and Docker runtime.
+
+### Infrastructure configuration
+
+| Component | Configuration |
+|---|---|
+| Cloud provider | Microsoft Azure |
+| Region | South Africa North |
+| Resource group | `rg-sentinel-api` |
+| Virtual network | `vnet-sentinel` |
+| VNet address space | `10.20.0.0/16` |
+| Subnet | `snet-app` |
+| Subnet address range | `10.20.1.0/24` |
+| Network Security Group | `nsg-sentinel` |
+| Virtual machine | `vm-sentinel-api` |
+| VM size | Standard_B1s |
+| Operating system | Ubuntu Server 24.04 LTS |
+| OS disk | 30 GiB Standard HDD |
+| Disk SKU | Standard_LRS |
+
+SSH access was restricted using the Network Security Group.
+
+The application itself was not exposed through a public application listener.
+
+## Deploying the published image
+
+The VM retrieves the image from GHCR.
+
+The deployment uses the commit-specific image tag rather than relying on `latest`.
+
+```bash
+docker pull ghcr.io/opsbyniyko/secure-api-pipeline:sha-<commit-sha>
+```
+
+The VM does not rebuild the application. The image was already built, scanned and published by the pipeline.
+
+## Persistent storage
+
+The database is stored outside the container:
+
+```text
+/opt/sentinel-api/data
+```
+
+The directory is mounted into:
+
+```text
+/app/data
+```
+
+This is important because container replacement should not automatically destroy application data.
+
+The database path is configured through the environment file:
+
+```text
+/etc/sentinel-api/sentinel.env
+```
+
+The environment file is kept outside the image and supplied at container startup.
+
+## Running the container
+
+The deployment uses the following runtime configuration:
+
+```bash
+docker run -d \
+  --name sentinel-api \
+  --restart unless-stopped \
+  --publish 127.0.0.1:8000:8000 \
+  --env-file /etc/sentinel-api/sentinel.env \
+  --volume /opt/sentinel-api/data:/app/data \
+  --read-only \
+  --tmpfs /tmp \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --pids-limit 100 \
+  --memory 384m \
+  --cpus 0.75 \
+  ghcr.io/opsbyniyko/secure-api-pipeline:sha-<commit-sha>
+```
+
+The host data directory must be writable by the container's application user.
+
+The port mapping is intentionally bound to `127.0.0.1`.
+
+## Accessing the API
+
+I use an SSH tunnel to access the private application from my local machine:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 \
+  sentineladmin@<VM_PUBLIC_IP>
+```
+
+Then:
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+Protected endpoints can be tested using the API key.
+
+### Why no public domain?
+
+The deployment objective was to validate the delivery process and operate the application on Azure.
+
+Public exposure, a custom domain, reverse proxy and HTTPS termination were not requirements.
+
+The private deployment was intentional.
+
+---
+
+# 10. Operational verification
+
+A deployment is not complete simply because `docker run` returns successfully.
+
+I use the following commands to inspect the running service.
+
+### Container status
+
+```bash
+docker ps
+```
+
+### Application logs
+
+```bash
+docker logs sentinel-api
+```
+
+### Resource consumption
+
+```bash
+docker stats sentinel-api --no-stream
+```
+
+### Container health
+
+```bash
+docker inspect \
+  --format='{{.State.Health.Status}}' \
+  sentinel-api
+```
+
+### Application health
+
+```bash
+curl http://127.0.0.1:8000/health
+```
+
+### Persistence verification
+
+A useful persistence test is to:
+
+1. Create an audit event.
+2. Confirm that it can be retrieved.
+3. Replace the application container.
+4. Retrieve the event again.
+
+If the event remains available, the host-mounted database directory is doing its job.
+
+The container restart policy also provides a mechanism for restarting the application after a container failure or VM restart.
+
+---
+
+# 11. Repository structure
+
+```text
+Secure-API-Pipeline/
+│
+├── .github/
+│   └── workflows/
+│       └── ci.yml
+│
+├── app/
+│   ├── main.py
+│   ├── config.py
+│   ├── database.py
+│   ├── middleware.py
+│   ├── security.py
+│   │
+│   └── schemas/
+│       └── audit.py
+│
+├── tests/
+│
+├── .dockerignore
+├── .env.example
+├── .gitignore
+├── Dockerfile
+├── pyproject.toml
+├── requirements.txt
+├── requirements-dev.txt
+└── README.md
+```
+
+Each part has a defined responsibility:
+
+- `app/` contains the application and its supporting modules.
+- `tests/` contains automated tests.
+- `.github/workflows/ci.yml` defines the delivery pipeline.
+- `Dockerfile` defines the container image.
+- `requirements.txt` defines runtime dependencies.
+- `requirements-dev.txt` includes the development and validation tools.
+- `.env.example` provides a configuration template without real credentials.
+- `pyproject.toml` contains tool configuration.
+
+---
+
+# 12. Running Sentinel API locally
+
+You don't need Azure to run the application or explore its endpoints.
+
+### Prerequisites
+
+- Python 3.14
+- Git
+- Docker (optional for local Python execution)
+
+### Clone the repository
 
 ```bash
 git clone https://github.com/OpsByNiyko/Secure-API-Pipeline.git
@@ -881,7 +817,7 @@ git clone https://github.com/OpsByNiyko/Secure-API-Pipeline.git
 cd Secure-API-Pipeline
 ```
 
-## Create a Virtual Environment
+### Create a virtual environment
 
 Linux/macOS:
 
@@ -899,179 +835,142 @@ python -m venv .venv
 .venv\Scripts\Activate.ps1
 ```
 
-## Install Dependencies
+### Install dependencies
 
 ```bash
 python -m pip install --upgrade pip
 
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-Install development dependencies using the project's development dependency configuration.
+### Configure the application
 
-## Run the Application
+```bash
+cp .env.example .env
+```
+
+Set your own API key in `.env`.
+
+Do not commit real credentials or production environment files.
+
+### Start the API
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-The API should now be accessible at:
+The service is available at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-## Run Tests
-
-```bash
-pytest
-```
-
-## Run Ruff
+### Run the validation tools
 
 ```bash
 ruff check .
 ruff format --check .
+
+pytest -v
+
+bandit -r app -ll
+
+pip-audit -r requirements.txt
 ```
 
-## Run Bandit
-
-```bash
-bandit -r app
-```
-
-## Run pip-audit
-
-```bash
-pip-audit
-```
-
-## Build the Docker Image
+### Build the Docker image
 
 ```bash
 docker build -t sentinel-api:local .
 ```
 
-## Run the Container
-
-For a local development run, supply the required environment configuration and a persistent data directory.
-
-Example:
+### Run the Docker container
 
 ```bash
 docker run -d \
   --name sentinel-api \
-  -p 127.0.0.1:8000:8000 \
+  --publish 127.0.0.1:8000:8000 \
   --env-file .env \
-  -v "$(pwd)/data:/app/data" \
   sentinel-api:local
 ```
 
-The production Azure deployment uses additional runtime restrictions documented in Stage 7.
+This is a basic local container run. The Azure deployment uses the additional runtime restrictions and persistent storage configuration described earlier.
 
 ---
 
-# Environment Variables
+# 13. Limitations and future engineering work
 
-The deployment uses an environment file rather than embedding secrets into the image.
+I believe a good engineering walkthrough should be honest about what a system does not provide.
 
-Example configuration:
+Sentinel API demonstrates a complete delivery path, but it is not a highly available production platform.
 
-```dotenv
-API_KEY=replace-with-a-secure-api-key
-DATABASE_PATH=/app/data/sentinel.db
-```
+There are several areas I would develop further.
 
-| Variable | Purpose |
-|---|---|
-| `API_KEY` | API authentication secret |
-| `DATABASE_PATH` | SQLite database location |
+| Current limitation | Possible improvement | Engineering objective |
+|---|---|---|
+| Manual deployment to the VM | Automated deployment and rollback | Repeatable releases |
+| Infrastructure provisioned manually | Terraform or Bicep | Reproducible infrastructure |
+| Environment file on the VM | Azure Key Vault | Centralized secret management |
+| Single VM | Highly available infrastructure | Reduce single points of failure |
+| SQLite on local disk | Managed PostgreSQL | Improved concurrency and managed recovery |
+| No automated database backup | Backup and restore automation | Data recovery |
+| Limited operational visibility | Centralized metrics and logging | Better incident investigation |
+| Mutable `latest` tag | Digest-based deployment and image signing | Stronger artifact verification |
 
-The actual configuration names should remain consistent with the application's settings implementation.
+These are potential extensions, not requirements that were left unfinished in the defined project scope.
 
-Do not commit real API keys, credentials, or production environment files to source control.
-
----
-
-# Deployment Architecture
-
-The final deployment separates application code, container image storage, runtime infrastructure, and persistent application data.
-
-| Component | Responsibility |
-|---|---|
-| GitHub Repository | Source code management |
-| GitHub Actions | Automated quality and security checks |
-| Trivy | Container vulnerability scanning |
-| GHCR | Container image storage |
-| Azure VM | Application hosting |
-| Docker | Container runtime |
-| Host Directory | Persistent SQLite storage |
-
-### Deployment Design Decisions
-
-**Why deploy a container image rather than the source code?**
-
-The image is built and scanned within the CI/CD pipeline. The VM retrieves the published artifact instead of independently reconstructing the application environment.
-
-**Why use a persistent host directory?**
-
-The SQLite database must survive container replacement and recreation.
-
-**Why bind the API to localhost?**
-
-The project did not require public application access. Binding to loopback keeps the API private while allowing access through an SSH tunnel.
-
-**Why use a non-root container user?**
-
-The application does not need administrative privileges to perform its normal workload.
-
-**Why use resource limits?**
-
-The deployment runs on a small virtual machine. CPU, memory, and process limits help constrain the container's resource consumption.
+The next iteration should be driven by an architectural requirement rather than by adding tools for the sake of adding them.
 
 ---
 
-# Operational Verification
+# 14. What this project taught me
 
-After deployment, the following checks can be used to verify the running service.
+Sentinel API reinforced a few engineering principles that I intend to carry into future projects.
 
-### Check Container Status
+**Automation needs meaningful gates.**
 
-```bash
-docker ps
-```
+A pipeline that only builds an image is not the same as a pipeline that validates the application, audits dependencies and assesses the resulting container.
 
-### Inspect Container Logs
+**Security findings need context.**
 
-```bash
-docker logs sentinel-api
-```
+The Trivy incident reminded me that scanner output must be investigated. A finding is a starting point for analysis, not a substitute for it.
 
-### Inspect Resource Usage
+**Artifacts deserve traceability.**
 
-```bash
-docker stats sentinel-api
-```
+The same image should be carried from scanning to publishing. Rebuilding an artifact after verification introduces unnecessary uncertainty.
 
-### Check Container Health
+**Infrastructure decisions should follow the workload.**
 
-```bash
-docker inspect \
-  --format='{{.State.Health.Status}}' \
-  sentinel-api
-```
+SQLite was appropriate for the scope of this service. A different workload would justify a different persistence architecture.
 
-### Check Application Health
+**Operational restrictions should be intentional.**
 
-From the VM:
+Non-root execution, read-only filesystems, restricted capabilities and resource limits all serve a purpose. They are not decorative Docker flags.
 
-```bash
-curl http://127.0.0.1:8000/health
-```
+**Deployment boundaries are architectural decisions.**
 
-### Verify Database Persistence
+A service does not have to be publicly exposed to demonstrate a successful cloud deployment.
 
-The database directory is stored on the VM rather than inside the container.
+---
 
-The persistence model can be verified by recreating the container and checking whether previously stored audit events remain accessible.
+# Closing thoughts
 
+Sentinel API started as a small application, but the real engineering exercise was everything surrounding it.
+
+I wanted to understand what happens between writing application code and having something running on infrastructure that I can inspect, validate and operate.
+
+That meant making decisions, encountering problems, investigating failures and occasionally discovering that the first explanation wasn't the correct one.
+
+The Trivy/SBOM issue was a good example. The easiest response would have been to weaken the pipeline. The more useful response was to investigate the image, understand the metadata and correct the specific source of the misleading finding.
+
+That's the approach I want to bring into every system I build.
+
+I don't want to collect technologies. I want to understand the systems they create, the problems they solve and the trade-offs they introduce.
+
+**This is Sentinel API. Built with intent. Engineered with purpose.**
+
+---
+
+**Built by OpsByNyiko**
+
+And project complete #!Shebang
